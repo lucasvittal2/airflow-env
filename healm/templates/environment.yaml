@@ -35,15 +35,15 @@ spec:
             valueFiles:
               - $values/helm/values.yaml
         - repoURL: 'https://github.com/lucasvittal2/airflow-env'
-          targetRevision: dev
+          targetRevision: {{.Values.Env}}
           ref: airflow/values
         - repoURL: 'https://github.com/lucasvittal2/airflow-env'
-          targetRevision: dev
-          path: airflow/homologation
+          targetRevision: {{.Values.Env}}
+          path: airflow/
           directory:
             recurse: false
             jsonnet: {}
-            exclude: '{homologation.yaml, values.yaml}'
+            exclude: '{templates/environment.yaml, values.yaml}'
       destination:
         server: '{{server}}'
         namespace: airflow
