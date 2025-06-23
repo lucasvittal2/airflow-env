@@ -57,7 +57,7 @@ EOF
 }
 
 # Default values
-DEFAULT_LOCATION="canadacentral"
+DEFAULT_LOCATION="centralUS"
 DEFAULT_NODE_COUNT=3
 DEFAULT_VM_SIZE="Standard_DS4_v2"
 DRY_RUN=false
@@ -145,7 +145,7 @@ setup_variables() {
     SERVICE_ACCOUNT_NAME="airflow"
     SERVICE_ACCOUNT_NAMESPACE="airflow"
     AKS_AIRFLOW_NAMESPACE="airflow"
-    AKS_AIRFLOW_CLUSTER_NAME="cluster-aks-airflow"
+    AKS_AIRFLOW_CLUSTER_NAME=CLUSTER_NAME
     AKS_AIRFLOW_LOGS_STORAGE_CONTAINER_NAME="airflow-logs"
     AKS_AIRFLOW_LOGS_STORAGE_SECRET_NAME="storage-account-credentials"
 
@@ -462,7 +462,9 @@ create_aks_cluster() {
         --enable-workload-identity \
         --generate-ssh-keys \
         --output table
-
+        log_info "Enabling Key Vault Access on cluster..."
+        az aks enable-addons --addons azure-keyvault-secrets-provider -g "${RESOURCE_GROUP_NAME}" -n "${CLUSTER_NAME}"
+        log_success "Key Vault Access enabled successfully."
     if [[ "$DRY_RUN" != "true" ]]; then
         export OIDC_URL=$(az aks show --resource-group "${RESOURCE_GROUP_NAME}" --name "${CLUSTER_NAME}" --query oidcIssuerProfile.issuerUrl --output tsv)
         export KUBELET_IDENTITY=$(az aks show -g "${RESOURCE_GROUP_NAME}" --name "${CLUSTER_NAME}" --output tsv --query identityProfile.kubeletidentity.objectId)
@@ -538,6 +540,41 @@ EOF
     log_success "Environment variables exported to: ${env_file}"
 }
 
+upload_airflow_images_to_registry() {
+  log_info "Checking and uploading Airflow images to registry..."
+
+  # Function to check if image exists in ACR
+  image_exists_in_acr() {
+    local image_name=$1
+    local image_tag=$2
+    az acr repository show-tags --name $ACR_REGISTRY --repository $image_name --query "contains([], '$image_tag')" --output tsv 2>/dev/null
+  }
+
+  # Import image only if it doesn't exist
+  safe_acr_import() {
+    local source=$1
+    local image_full=$2
+    local image_name=$(echo $image_full | cut -d':' -f1)
+    local image_tag=$(echo $image_full | cut -d':' -f2)
+
+    if [[ $(image_exists_in_acr $image_name $image_tag) == "true" ]]; then
+      log_info "Image $image_full already exists in registry, skipping..."
+    else
+      log_info "Importing $image_full..."
+      az acr import --name $ACR_REGISTRY --source $source --image $image_full
+    fi
+  }
+
+  # List of images to import
+  safe_acr_import "docker.io/apache/airflow:airflow-pgbouncer-2024.01.19-1.21.0" "airflow:airflow-pgbouncer-2024.01.19-1.21.0"
+  safe_acr_import "docker.io/apache/airflow:airflow-pgbouncer-exporter-2024.06.18-0.17.0" "airflow:airflow-pgbouncer-exporter-2024.06.18-0.17.0"
+  safe_acr_import "docker.io/bitnami/postgresql:16.1.0-debian-11-r15" "postgresql:16.1.0-debian-11-r15"
+  safe_acr_import "quay.io/prometheus/statsd-exporter:v0.26.1" "statsd-exporter:v0.26.1"
+  safe_acr_import "docker.io/apache/airflow:2.9.3" "airflow:2.9.3"
+  safe_acr_import "registry.k8s.io/git-sync/git-sync:v4.1.0" "git-sync:v4.1.0"
+
+  log_success "Airflow images check/upload completed"
+}
 # Main execution function
 
 log_info "Starting Azure Airflow Infrastructure Provisioning"
@@ -559,7 +596,7 @@ create_storage_account
 create_aks_cluster
 connect_to_cluster
 export_variables
-
+upload_airflow_images_to_registry
 log_success "Infrastructure provisioning completed successfully!"
 
 if [[ "$DRY_RUN" != "true" ]]; then
