@@ -214,7 +214,10 @@ provision_cluster() {
         export OIDC_URL=$(az aks show --resource-group "$MY_RESOURCE_GROUP_NAME" --name "$MY_CLUSTER_NAME" --query oidcIssuerProfile.issuerUrl --output tsv)
         export KUBELET_IDENTITY=$(az aks show -g "$MY_RESOURCE_GROUP_NAME" --name "$MY_CLUSTER_NAME" --output tsv --query identityProfile.kubeletidentity.objectId)
         az role assignment create --assignee "$KUBELET_IDENTITY" --role "AcrPull" --scope "$MY_ACR_REGISTRY_ID" --output table || log_warning "Failed to assign AcrPull. It may already be assigned."
+        log_info "Connection to the cluster ${AKS_AIRFLOW_CLUSTER_NAME}..."
         az aks get-credentials --resource-group "$MY_RESOURCE_GROUP_NAME" --name "$MY_CLUSTER_NAME" --overwrite-existing --output table
+        log_success "Connected to the cluster successfully !"
+        log_success "Provisioning of AKS cluster ${AKS_AIRFLOW_CLUSTER_NAME} finished."
     else
         log_error "Provider '${DEPLOY_ENV}' is invalid or unavailable. Skipping AKS provisioning."
     fi
