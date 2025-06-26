@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: pv-airflow-logs
+  labels:
+    type: local
+spec:
+  capacity:
+    storage: 5Gi
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Delete
+  storageClassName: azureblob-fuse-premium
+  mountOptions:
+    - -o allow_other
+    - --file-cache-timeout-in-seconds=120
+  csi:
+    driver: blob.csi.azure.com
+    readOnly: false
+    volumeHandle: airflow-logs-1
+    volumeAttributes:
+      resourceGroup: {{.Values.deployParams.MY_RESOURCE_GROUP_NAME}}
+      storageAccount: {{.Values.deployParams.AKS_AIRFLOW_LOGS_STORAGE_ACCOUNT_NAME}}
+      containerName: {{.Values.deployParams.AKS_AIRFLOW_LOGS_STORAGE_CONTAINER_NAME}}
+    nodeStageSecretRef:
+      name: {{.Values.deployParams.AKS_AIRFLOW_LOGS_STORAGE_SECRET_NAME}}
+      namespace: {{.Values.deployParams.AKS_AIRFLOW_NAMESPACE}}
