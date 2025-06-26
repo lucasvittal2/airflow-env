@@ -36,7 +36,7 @@ Run the provided script to provision infrastructure and deploy Airflow:
 
 # Exemple of running provision.sh infrastructure on Azure Cloud
 .devops/bash/provisioning.sh \
-  --environment dev \
+  --environment prod \
   --location canadacentral  \
   --deploy-env azure --node-count 2 \
   --subscription "Azure subscription 1" \
@@ -52,7 +52,7 @@ kubectl create namespace ${AKS_AIRFLOW_NAMESPACE} --dry-run=client --output yaml
 > **Note:** Replace the values for `--environment`, `--location`, `--subscription`, and `--vm-size` as needed for your setup.
 ### 3. Deploy airflow on Cloud Cluster using kubernetes and helm
 ```shell
-.devops/bash/deploy.sh  --environment dev
+.devops/bash/deploy.sh  --environment prod
 ```
 ### 4. Accessing Airflow
 
