@@ -1,7 +1,8 @@
 .env
 .idea
-/helm/Chart.lock
+/helm/airflow/Chart.lock
 /dev.env
 /airflowsshkey
 /airflow-ns.json
 /helm/charts/airflow-1.16.0.tgz
+/helm/airflow/charts/airflow-1.16.0.tgz
