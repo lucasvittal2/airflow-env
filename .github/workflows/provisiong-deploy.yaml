@@ -34,7 +34,7 @@ jobs:
 
     - name: Provision Azure Cluster Resources
       run: |
-        .devops/bash/provisioning.sh \
+        .github/bash/provisioning.sh \
           --environment ${{ env.deploy_env }} \
           --location ${{ env.location }} \
           --deploy-env ${{ env.cloud_provider }} \
@@ -44,4 +44,4 @@ jobs:
 
     - name: Deploy airflow on AKS using kubernetes and Helm chart
       run: |
-        .devops/bash/deploy.sh --environment ${{ env.deploy_env }}
+        .github/bash/deploy.sh --environment ${{ env.deploy_env }}
