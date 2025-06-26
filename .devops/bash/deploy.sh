@@ -1,247 +1,197 @@
 #!/bin/bash
 
-kubectl create namespace ${AKS_AIRFLOW_NAMESPACE} --dry-run=client --output yaml | kubectl apply -f -
+set -euo pipefail
 
-export APP_OBJ_ID=$(az ad sp list --all --query "[].{objectId:id}" -o table | grep f0a7d5cd-717a-45bd-8246-0b9d3bb7f802)
-# giver permission to key vault
-az keyvault set-policy --name $MY_KEYVAULT_NAME --object-id $MY_IDENTITY_NAME_PRINCIPAL_ID --secret-permissions get --output table
-az keyvault set-policy \
-  --name "$MY_KEYVAULT_NAME" \
-  --object-id "${APP_OBJ_ID}" \
-  --secret-permissions get
+# Color codes for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --environment) env="$2"; shift 2 ;;
+        *) log_error "Unknown argument: $1"; print_usage ;;
+    esac
+done
+
+# get global vars
+source  "${env}.env"
+
+# Logging functions
+log_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
+log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
+log_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
+log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 
-export TENANT_ID=$(az account show --query tenantId -o tsv)
-cat <<EOF | kubectl apply -f -
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  annotations:
-    azure.workload.identity/client-id: "${MY_IDENTITY_NAME_CLIENT_ID}"
-    azure.workload.identity/tenant-id: "${TENANT_ID}"
-  name: "${SERVICE_ACCOUNT_NAME}"
-  namespace: "${AKS_AIRFLOW_NAMESPACE}"
-EOF
 
-helm repo add external-secrets https://charts.external-secrets.io
-helm repo update
-helm install external-secrets \
-external-secrets/external-secrets \
---namespace ${AKS_AIRFLOW_NAMESPACE} \
---create-namespace \
---set installCRDs=true \
---wait
+create_namespace_if_not_exists() {
+  local NAMESPACE="${AKS_AIRFLOW_NAMESPACE}"
 
-kubectl apply -f - <<EOF
-apiVersion: external-secrets.io/v1
-kind: SecretStore
-metadata:
-  name: azure-store
-  namespace: ${AKS_AIRFLOW_NAMESPACE}
-spec:
-  provider:
-    # provider type: azure keyvault
-    azurekv:
-      authType: WorkloadIdentity
-      vaultUrl: "${KEYVAULTURL}"
-      serviceAccountRef:
-        name: ${SERVICE_ACCOUNT_NAME}
-EOF
+  log_info "Checking if namespace '$NAMESPACE' exists..."
+  if kubectl get namespace "$NAMESPACE" >/dev/null 2>&1; then
+    log_info "Namespace '$NAMESPACE' already exists. Skipping creation."
+  else
+    log_info "Namespace '$NAMESPACE' does not exist. Creating..."
+    kubectl create namespace "$NAMESPACE" --dry-run=client --output yaml | kubectl apply -f -
+    log_success "Namespace '$NAMESPACE' created."
+  fi
+}
 
-kubectl apply -f - <<EOF
-apiVersion: external-secrets.io/v1
-kind: ExternalSecret
-metadata:
-  name: airflow-aks-azure-logs-secrets
-  namespace: ${AKS_AIRFLOW_NAMESPACE}
-spec:
-  refreshInterval: 1h
-  secretStoreRef:
-    kind: SecretStore
-    name: azure-store
+install_external_secrets_plugin() {
 
-  target:
-    name: ${AKS_AIRFLOW_LOGS_STORAGE_SECRET_NAME}
-    creationPolicy: Owner
+  log_info "Checking if external-secrets Helm repo is added..."
+  if ! helm repo list | grep -q '^external-secrets'; then
+    log_info "Adding external-secrets Helm repo..."
+    helm repo add external-secrets https://charts.external-secrets.io
+    log_success "external-secrets Helm repo added."
+  else
+    log_info "external-secrets Helm repo already exists."
+  fi
 
-  data:
-    # name of the SECRET in the Azure KV (no prefix is by default a SECRET)
-    - secretKey: azurestorageaccountname
-      remoteRef:
-        key: AKS-AIRFLOW-LOGS-STORAGE-ACCOUNT-NAME
-    - secretKey: azurestorageaccountkey
-      remoteRef:
-        key: AKS-AIRFLOW-LOGS-STORAGE-ACCOUNT-KEY
-EOF
+  log_info "Updating Helm repos..."
+  helm repo update
 
-echo "identity client id: ${MY_IDENTITY_NAME}/${MY_RESOURCE_GROUP_NAME}/${AKS_AIRFLOW_NAMESPACE}/${SERVICE_ACCOUNT_NAME}"
-az identity federated-credential create \
-  --name external-secret-operator \
-  --identity-name "${MY_IDENTITY_NAME}" \
-  --resource-group "${MY_RESOURCE_GROUP_NAME}" \
-  --issuer "${OIDC_URL}" \
-  --subject "system:serviceaccount:${AKS_AIRFLOW_NAMESPACE}:${SERVICE_ACCOUNT_NAME}" \
-  --audience "api://AzureADTokenExchange" \
-  --output table
+  log_info "Checking if external-secrets release is installed in namespace '${AKS_AIRFLOW_NAMESPACE}'..."
+  if ! helm status external-secrets --namespace "${AKS_AIRFLOW_NAMESPACE}" >/dev/null 2>&1; then
+    log_info "Installing external-secrets plugin in namespace '${AKS_AIRFLOW_NAMESPACE}'..."
+    helm install external-secrets \
+      external-secrets/external-secrets \
+      --namespace "${AKS_AIRFLOW_NAMESPACE}" \
+      --create-namespace \
+      --set installCRDs=true \
+      --wait
+    log_success "external-secrets plugin installed in namespace '${AKS_AIRFLOW_NAMESPACE}'."
+  else
+    log_info "External Secrets plugin is already installed in namespace ${AKS_AIRFLOW_NAMESPACE}."
+  fi
+}
 
-kubectl apply -f - <<EOF
-apiVersion: v1
-kind: PersistentVolume
-metadata:
-  name: pv-airflow-logs
-  labels:
-    type: local
-spec:
-  capacity:
-    storage: 5Gi
-  accessModes:
-    - ReadWriteMany
-  persistentVolumeReclaimPolicy: Delete
-  storageClassName: azureblob-fuse-premium
-  mountOptions:
-    - -o allow_other
-    - --file-cache-timeout-in-seconds=120
-  csi:
-    driver: blob.csi.azure.com
-    readOnly: false
-    volumeHandle: airflow-logs-1
-    volumeAttributes:
-      resourceGroup: ${MY_RESOURCE_GROUP_NAME}
-      storageAccount: ${AKS_AIRFLOW_LOGS_STORAGE_ACCOUNT_NAME}
-      containerName: ${AKS_AIRFLOW_LOGS_STORAGE_CONTAINER_NAME}
-    nodeStageSecretRef:
-      name: ${AKS_AIRFLOW_LOGS_STORAGE_SECRET_NAME}
-      namespace: ${AKS_AIRFLOW_NAMESPACE}
-EOF
+create_airflow_git_ssh_secret_if_not_exists() {
+  local SECRET_NAME="airflow-git-ssh-secret"
+  local NAMESPACE="${AKS_AIRFLOW_NAMESPACE}"
+  local SSH_KEY_PATH="$HOME/.ssh/airflowsshkey.pub"
 
-kubectl apply -f - <<EOF
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: pvc-airflow-logs
-  namespace: ${AKS_AIRFLOW_NAMESPACE}
-spec:
-  storageClassName: azureblob-fuse-premium
-  accessModes:
-    - ReadWriteMany
-  resources:
-    requests:
-      storage: 5Gi
-  volumeName: pv-airflow-logs
-EOF
+  log_info "Checking if secret '$SECRET_NAME' exists in namespace '$NAMESPACE'..."
+  if kubectl get secret "$SECRET_NAME" --namespace "$NAMESPACE" >/dev/null 2>&1; then
+    log_info "Secret '$SECRET_NAME' already exists in namespace '$NAMESPACE'. Skipping creation."
+  else
+    log_info "Secret '$SECRET_NAME' does not exist. Creating..."
+    kubectl create secret generic "$SECRET_NAME" \
+      --from-file=gitSshKey="$SSH_KEY_PATH" \
+      --namespace "$NAMESPACE"
+    log_success "Secret '$SECRET_NAME' created in namespace '$NAMESPACE'."
+  fi
+}
+generate_values_yaml() {
+  local env_file="$1.env"
+  local template_file="helm/airflow/values.template.yaml"
+  local output_file="helm/airflow/values.yaml"
 
-kubectl create secret generic airflow-git-ssh-secret \
-  --from-file=gitSshKey=$HOME/.ssh/airflowsshkey.pub \
-  --namespace ${AKS_AIRFLOW_NAMESPACE}
+  # Export all variables from the env file
+  set -a
+  source "$env_file"
+  set +a
 
-cat <<EOF > airflow_values.yaml
-webserverSecretKey: f1023ed56bd3eb8ee2b069c5eec748b5
-images:
-  airflow:
-    repository: $MY_ACR_REGISTRY.azurecr.io/airflow
-    tag: 2.9.3
-    # Specifying digest takes precedence over tag.
-    digest: ~
-    pullPolicy: IfNotPresent
-  # To avoid images with user code, you can turn this to 'true' and
-  # all the 'run-airflow-migrations' and 'wait-for-airflow-migrations' containers/jobs
-  # will use the images from 'defaultAirflowRepository:defaultAirflowTag' values
-  # to run and wait for DB migrations .
-  useDefaultImageForMigration: false
-  # timeout (in seconds) for airflow-migrations to complete
-  migrationsWaitTimeout: 60
-  pod_template:
-    # Note that \`images.pod_template.repository\` and \`images.pod_template.tag\` parameters
-    # can be overridden in \`config.kubernetes\` section. So for these parameters to have effect
-    # \`config.kubernetes.worker_container_repository\` and \`config.kubernetes.worker_container_tag\`
-    # must be not set .
-    repository: $MY_ACR_REGISTRY.azurecr.io/airflow
-    tag: 2.9.3
-    pullPolicy: IfNotPresent
-  flower:
-    repository: $MY_ACR_REGISTRY.azurecr.io/airflow
-    tag: 2.9.3
-    pullPolicy: IfNotPresent
-  statsd:
-    repository: $MY_ACR_REGISTRY.azurecr.io/statsd-exporter
-    tag: v0.26.1
-    pullPolicy: IfNotPresent
-  pgbouncer:
-    repository: $MY_ACR_REGISTRY.azurecr.io/airflow
-    tag: airflow-pgbouncer-2024.01.19-1.21.0
-    pullPolicy: IfNotPresent
-  pgbouncerExporter:
-    repository: $MY_ACR_REGISTRY.azurecr.io/airflow
-    tag: airflow-pgbouncer-exporter-2024.06.18-0.17.0
-    pullPolicy: IfNotPresent
-  gitSync:
-    repository: $MY_ACR_REGISTRY.azurecr.io/git-sync
-    tag: v4.1.0
-    pullPolicy: IfNotPresent
+  # Map variable names in .env to placeholders in the template
+  declare -A mapping=(
+    [AKS_AIRFLOW_NAMESPACE]="$AKS_AIRFLOW_NAMESPACE"
+    [AZ_TENANT_ID]="$TENANT_ID"
+    [SERVICE_ACCOUNT_NAME]="$SERVICE_ACCOUNT_NAME"
+    [MY_IDENTITY_NAME]="$MY_IDENTITY_NAME"
+    [KEYVAULT_URL]="$KEYVAULTURL"
+    [AKS_AIRFLOW_LOGS_STORAGE_SECRET_NAME]="$AKS_AIRFLOW_LOGS_STORAGE_SECRET_NAME"
+    [AKS_AIRFLOW_LOGS_STORAGE_CONTAINER_NAME]="$AKS_AIRFLOW_LOGS_STORAGE_CONTAINER_NAME"
+    [AKS_AIRFLOW_LOGS_STORAGE_ACCOUNT_NAME]="$AKS_AIRFLOW_LOGS_STORAGE_ACCOUNT_NAME"
+    [MY_RESOURCE_GROUP_NAME]="$MY_RESOURCE_GROUP_NAME"
+    [MY_IDENTITY_NAME_CLIENT_ID]="$MY_IDENTITY_NAME_CLIENT_ID"
+    [TENANT_ID]="$TENANT_ID"
+    [KEYVAULTURL]="$KEYVAULTURL"
+    [MY_ACR_REGISTRY]="$MY_ACR_REGISTRY"
+  )
 
-# Airflow executor
-executor: "KubernetesExecutor"
+  # Read the template into a variable
+  local content
+  content=$(<"$template_file")
 
-# Environment variables for all airflow containers
-env:
-  - name: ENVIRONMENT
-    value: dev
+  # Replace placeholders with values from mapping
+  for key in "${!mapping[@]}"; do
+    value="${mapping[$key]}"
+    # Escape forward slashes for sed
+    esc_value=$(printf '%s' "$value" | sed -e 's/[\/&]/\\&/g')
+    # Replace both <VAR> and <VAR_NAME>
+    content=$(echo "$content" | sed "s/<$key>/$esc_value/g")
+  done
 
-extraEnv: |
-  - name: AIRFLOW__CORE__DEFAULT_TIMEZONE
-    value: 'America/New_York'
+  # Save to output
+  echo "$content" > "$output_file"
+  echo "Generated $output_file"
+}
 
-# Configuration for postgresql subchart
-# Not recommended for production! Instead, spin up your own Postgresql server and use the \`data\` attribute in this
-# yaml file.
-postgresql:
-  enabled: true
+install_or_upgrade_airflow_chart() {
+  local RELEASE_NAME="airflow"
+  local NAMESPACE="${AKS_AIRFLOW_NAMESPACE}"
+  local VALUES_FILE="helm/airflow/values.yaml"
+  local CHART_VERSION="1.15.0"
+  local CHART_REPO="apache-airflow"
+  local CHART_NAME="airflow"
+  local CHART_FULL="helm/${CHART_NAME}"
 
-# Enable pgbouncer. See https://airflow.apache.org/docs/helm-chart/stable/production-guide.html#pgbouncer
-pgbouncer:
-  enabled: true
+  log_info "Adding and updating Helm repo for Airflow..."
+  helm repo add "$CHART_REPO" https://airflow.apache.org
+  helm repo update
+  cd "$CHART_FULL"
+  helm dependency build
+  cd "../../"
+  log_info "Checking if Airflow release exists in namespace '$NAMESPACE'..."
+  if helm status "$RELEASE_NAME" --namespace "$NAMESPACE" >/dev/null 2>&1; then
+    log_info "Airflow release already exists in namespace '$NAMESPACE'. Upgrading chart..."
+    helm upgrade "$RELEASE_NAME" "$CHART_FULL" \
+      --namespace "$NAMESPACE" \
+      -f "$VALUES_FILE" \
+      --version "$CHART_VERSION" \
+      --debug
+    log_success "Airflow chart upgraded in namespace '$NAMESPACE'."
+  else
+    log_info "Airflow release does not exist in namespace '$NAMESPACE'. Installing chart..."
 
-dags:
-  gitSync:
-    enabled: true
-    repo: https://github.com/donhighmsft/airflowexamples.git
-    branch: main
-    rev: HEAD
-    depth: 1
-    maxFailures: 0
-    subPath: "dags"
-    sshKeySecret: airflow-git-ssh-secret
-    knownHosts: |
-      github.com ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCj7ndNxQowgcQnjshcLrqPEiiphnt+VTTvDP6mHBL9j1aNUkY4Ue1gvwnGLVlOhGeYrnZaMgRK6+PKCUXaDbC7qtbW8gIkhL7aGCsOr/C56SJMy/BCZfxd1nWzAOxSDPgVsmerOBYfNqltV9/hWCqBywINIR+5dIg6JTJ72pcEpEjcYgXkE2YEFXV1JHnsKgbLWNlhScqb2UmyRkQyytRLtL+38TGxkxCflmO+5Z8CSSNY7GidjMIZ7Q4zMjA2n1nGrlTDkzwDCsw+wqFPGQA179cnfGWOWRVruj16z6XyvxvjJwbz0wQZ75XK5tKSb7FNyeIEs4TT4jk+S4dhPeAUC5y+bDYirYgM4GC7uEnztnZyaVWQ7B381AK4Qdrwt51ZqExKbQpTUNn+EjqoTwvqNj4kqx5QUCI0ThS/YkOxJCXmPUWZbhjpCg56i+2aB6CmK2JGhn57K5mj0MNdBXA4/WnwH6XoPWJzK5Nyu2zB3nAZp+S5hpQs+p1vN1/wsjk=
+    helm install "$RELEASE_NAME" "$CHART_FULL" \
+      --namespace "$NAMESPACE" \
+      --create-namespace \
+      -f "$VALUES_FILE" \
+      --version "$CHART_VERSION" \
+      --debug
+    log_success "Airflow chart installed in namespace '$NAMESPACE'."
+  fi
 
-logs:
-  persistence:
-    enabled: true
-    existingClaim: pvc-airflow-logs
-    storageClassName: azureblob-fuse-premium
+  log_info "Listing pods in namespace '$NAMESPACE' after Airflow install/upgrade:"
+  kubectl get pods -n "$NAMESPACE"
+  rm $VALUES_FILE
+}
 
-# We disable the log groomer sidecar because we use Azure Blob Storage for logs, with lifecyle policy set.
-triggerer:
-  logGroomerSidecar:
-    enabled: false
+port_forward_airflow_webserver_if_available() {
+  local NAMESPACE="${AKS_AIRFLOW_NAMESPACE}"
+  local LOCAL_PORT=$1
+  local REMOTE_PORT=8080
+  local SERVICE_NAME="airflow-webserver"
 
-scheduler:
-  logGroomerSidecar:
-    enabled: false
+  log_info "Checking if local port $LOCAL_PORT is available for port-forward..."
+  if lsof -i :"$LOCAL_PORT" >/dev/null 2>&1; then
+    log_warning "Local port $LOCAL_PORT is already in use. Skipping port-forward."
+  else
+    log_info "Local port $LOCAL_PORT is available. Starting port-forward to Airflow webserver..."
+    kubectl port-forward svc/"$SERVICE_NAME" "$LOCAL_PORT":"$REMOTE_PORT" -n "$NAMESPACE"
+  fi
+}
 
-workers:
-  logGroomerSidecar:
-    enabled: false
-EOF
-
-helm repo add apache-airflow https://airflow.apache.org
-helm repo update
-helm search repo airflow
-
-helm install airflow apache-airflow/airflow --namespace ${AKS_AIRFLOW_NAMESPACE} --create-namespace -f airflow_values.yaml  --version 1.15.0 --debug
-
-helm search repo airflow
-
-kubectl get pods -n ${AKS_AIRFLOW_NAMESPACE}
-
-kubectl port-forward svc/airflow-webserver 9090:8080 -n ${AKS_AIRFLOW_NAMESPACE}
+log_info "Starting Airflow setup steps..."
+create_namespace_if_not_exists
+create_airflow_git_ssh_secret_if_not_exists
+generate_values_yaml $env
+install_external_secrets_plugin
+install_or_upgrade_airflow_chart
+log_info "Starting port-forward for Airflow webserver..."
+port_forward_airflow_webserver_if_available 9090
+log_success "Script execution completed."
