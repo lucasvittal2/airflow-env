@@ -9,7 +9,7 @@ spec:
     storage: 5Gi
   accessModes:
     - ReadWriteMany
-  persistentVolumeReclaimPolicy: Retain # If set as "Delete" container would be removed after pvc deletion
+  persistentVolumeReclaimPolicy: Delete
   storageClassName: azureblob-fuse-premium
   mountOptions:
     - -o allow_other
@@ -19,9 +19,9 @@ spec:
     readOnly: false
     volumeHandle: airflow-logs-1
     volumeAttributes:
-      resourceGroup: airflowlogsdevsa
-      storageAccount: airflowlogsdevsa
-      containerName: airflow-logs
+      resourceGroup: {{.Values.deployParams.MY_RESOURCE_GROUP_NAME}}
+      storageAccount: {{.Values.deployParams.AKS_AIRFLOW_LOGS_STORAGE_ACCOUNT_NAME}}
+      containerName: {{.Values.deployParams.AKS_AIRFLOW_LOGS_STORAGE_CONTAINER_NAME}}
     nodeStageSecretRef:
-      name: storage-account-credentials
-      namespace: airflow
+      name: {{.Values.deployParams.AKS_AIRFLOW_LOGS_STORAGE_SECRET_NAME}}
+      namespace: {{.Values.deployParams.AKS_AIRFLOW_NAMESPACE}}
