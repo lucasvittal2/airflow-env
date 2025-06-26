@@ -1,6 +1,6 @@
 # Airflow on Kubernetes with Helm
 
-This repository provides an automated solution to deploy Apache Airflow on a Kubernetes cluster using Helm charts. The main goal is to simplify the provisioning and deployment process, making it easy to deploy a fully functional Airflow production like environment running on main cloud players (GOOGLE, Azure, AWS) with minimal manual intervention.
+This repository provides an automated solution to deploy Apache Airflow on a Kubernetes cluster using Helm charts. The main goal is to simplify the provisioning and deployment process, making it easy to deploy a fully functional Airflow hmluction like environment running on main cloud players (GOOGLE, Azure, AWS) with minimal manual intervention.
 
 ## Features
 
@@ -36,7 +36,7 @@ Run the provided script to provision infrastructure and deploy Airflow:
 
 # Exemple of running provision.sh infrastructure on Azure Cloud
 .devops/bash/provisioning.sh \
-  --environment prod \
+  --environment hml \
   --location canadacentral  \
   --deploy-env azure --node-count 2 \
   --subscription "Azure subscription 1" \
@@ -52,7 +52,7 @@ kubectl create namespace ${AKS_AIRFLOW_NAMESPACE} --dry-run=client --output yaml
 > **Note:** Replace the values for `--environment`, `--location`, `--subscription`, and `--vm-size` as needed for your setup.
 ### 3. Deploy airflow on Cloud Cluster using kubernetes and helm
 ```shell
-.devops/bash/deploy.sh  --environment prod
+.devops/bash/deploy.sh  --environment hml
 ```
 ### 4. Accessing Airflow
 
@@ -62,7 +62,7 @@ After follow all guides until here, you can access your airflow env on `localhos
 
 - **Node Count:** Adjust with `--node-count` to scale your cluster.
 - **VM Size:** Select a different size with `--vm-size` as per your workload.
-- **Environment:** Use custom names for different deployments (e.g., `dev`, `prod`).
+- **Environment:** Use custom names for different deployments (e.g., `dev`, `hml`).
 
 ## Guidelines
 
