@@ -1,0 +1,47 @@
+name: Run Azure Login With a Service Principal Secret
+
+on:
+  pull_request_review:
+    types: [submitted]
+    branches: [hml]
+    paths:
+      - 'helm/airflow/**'
+
+env:
+  deploy_env: "hml"
+  location: "canadacentral"
+  cloud_provider: "azure"
+  subscription: "Azure subscription 1"
+  vm_size: "Standard_B2ps_v2"
+  nodes: 2
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+
+    if: github.event.review.state == 'approved'
+
+    steps:
+
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Azure Login
+      uses: azure/login@v2
+      with:
+        creds: ${{ secrets.AZURE_SP_SECRET }}
+
+    - name: Provision Azure Cluster Resources
+      run: |
+        .github/bash/provisioning.sh \
+          --environment ${{ env.deploy_env }} \
+          --location ${{ env.location }} \
+          --deploy-env ${{ env.cloud_provider }} \
+          --node-count ${{ env.nodes }} \
+          --subscription "${{ env.subscription }}" \
+          --vm-size ${{ env.vm_size }}
+
+    - name: Deploy airflow on AKS using kubernetes and Helm chart
+      run: |
+        .github/bash/deploy.sh --environment ${{ env.deploy_env }}
