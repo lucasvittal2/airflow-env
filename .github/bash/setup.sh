@@ -3,7 +3,7 @@
 
 # echo provisioning infrastructure on azure cloud
 
-.devops/bash/provisioning.sh \
+.github/bash/provisioning.sh \
 --environment dev \
 --location canadacentral  \
 --deploy-env azure --node-count 2 \
@@ -12,5 +12,5 @@
 
 kubectl create namespace ${AKS_AIRFLOW_NAMESPACE} --dry-run=client --output yaml | kubectl apply -f -
 #deploy airflow on AKS
-.devops/bash/deploy.sh  --environment dev
+.github/bash/deploy.sh  --environment dev
 
