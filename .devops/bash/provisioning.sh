@@ -51,7 +51,7 @@ log_info "Setting Azure subscription to '$AZ_SUBSCRIPTION'"
 az account set --subscription "$AZ_SUBSCRIPTION"
 
 export MY_IDENTITY_NAME="airflow-identity-${env}"
-export MY_ACR_REGISTRY=airflowregistry${env}${env}
+export MY_ACR_REGISTRY=airflowregistry${env}
 export MY_KEYVAULT_NAME="airflow-vault-${env}-kv"
 export MY_CLUSTER_NAME="apache-airflow-aks"
 export SERVICE_ACCOUNT_NAME="airflow"
@@ -249,7 +249,115 @@ import_images() {
         log_error "Provider '${DEPLOY_ENV}' is invalid or unavailable. Skipping image import."
     fi
 }
+# shellcheck disable=SC2120
+grant_permission_to_cluster_on_secret_manager() {
+  # Find the last objectId for the given app displayName
+  local APP_OBJ_ID
+  APP_OBJ_ID=$(az ad sp list --all --query "[?displayName=='airflow-identity-dev'].{objectId:id}" -o tsv | tail -n 1)
 
+  # Function to check if a key vault policy already exists for an object ID and permission
+  has_kv_policy() {
+    local OBJ_ID="$1"
+    az keyvault show --name "$MY_KEYVAULT_NAME" --query "properties.accessPolicies[?objectId=='$OBJ_ID']" -o json | \
+      grep -q '"permissions"' && \
+    az keyvault show --name "$MY_KEYVAULT_NAME" \
+      --query "properties.accessPolicies[?objectId=='$OBJ_ID'].permissions.secrets[]" -o json | \
+      grep -q "\"get\""
+  }
+
+  # Give permission to key vault for cluster identity if not already present
+  if ! has_kv_policy "$MY_IDENTITY_NAME_PRINCIPAL_ID"; then
+    log_info "Granting 'get' secret permission to cluster identity"
+    az keyvault set-policy --name "$MY_KEYVAULT_NAME" --object-id "$MY_IDENTITY_NAME_PRINCIPAL_ID" --secret-permissions get --output table
+  else
+    log_info "'get' secret permission already granted to cluster identity. Skipping."
+  fi
+
+  # Give permission to key vault for airflow-identity-dev app if not already present
+  if ! has_kv_policy "$APP_OBJ_ID"; then
+    log_info "Granting 'get' secret permission to airflow-identity-dev"
+    az keyvault set-policy --name "$MY_KEYVAULT_NAME" --object-id "$APP_OBJ_ID" --secret-permissions get --output table
+  else
+    log_info "'get' secret permission already granted to airflow-identity-dev. Skipping."
+  fi
+
+  if [[ "${DEPLOY_ENV}" == "azure" ]]; then
+    log_info "Checking if federated credential already exists for cluster access to key vault"
+    # Check if the federated credential already exists
+    local EXISTING
+    EXISTING=$(az identity federated-credential list \
+      --identity-name "${MY_IDENTITY_NAME}" \
+      --resource-group "${MY_RESOURCE_GROUP_NAME}" \
+      --query "[?name=='external-secret-operator'] | length(@)" \
+      --output tsv)
+
+    if [[ "${EXISTING}" == "0" ]]; then
+      log_info "Granting federated credential for cluster access to key vault"
+      az identity federated-credential create \
+        --name external-secret-operator \
+        --identity-name "${MY_IDENTITY_NAME}" \
+        --resource-group "${MY_RESOURCE_GROUP_NAME}" \
+        --issuer "${OIDC_URL}" \
+        --subject "system:serviceaccount:${AKS_AIRFLOW_NAMESPACE}:${SERVICE_ACCOUNT_NAME}" \
+        --audience "api://AzureADTokenExchange" \
+        --output table
+    else
+      log_info "Federated credential already exists. Skipping creation."
+    fi
+  else
+    log_error "Provider '${DEPLOY_ENV}' is invalid or unavailable. Skipping operation."
+  fi
+}
+
+write_globals_to_env() {
+  env=$1
+    local env_file="${env}.env"
+    # Clear or create the dev.env file
+    > "$env_file"
+
+    # List of global variable names to export to dev.env
+    log_info "Exporting variables to $env_file"
+    export MY_IDENTITY_NAME_ID=$(az identity show --name "$MY_IDENTITY_NAME" --resource-group "$MY_RESOURCE_GROUP_NAME" --query id --output tsv)
+    export MY_IDENTITY_NAME_PRINCIPAL_ID=$(az identity show --name "$MY_IDENTITY_NAME" --resource-group "$MY_RESOURCE_GROUP_NAME" --query principalId --output tsv)
+    export MY_IDENTITY_NAME_CLIENT_ID=$(az identity show --name "$MY_IDENTITY_NAME" --resource-group "$MY_RESOURCE_GROUP_NAME" --query clientId --output tsv)
+    export OIDC_URL=$(az aks show --resource-group "$MY_RESOURCE_GROUP_NAME" --name "$MY_CLUSTER_NAME" --query oidcIssuerProfile.issuerUrl --output tsv)
+    export KUBELET_IDENTITY=$(az aks show -g "$MY_RESOURCE_GROUP_NAME" --name "$MY_CLUSTER_NAME" --output tsv --query identityProfile.kubeletidentity.objectId)
+    export TENANT_ID=$(az account show --query tenantId -o tsv)
+    local global_vars=(
+        MY_IDENTITY_NAME
+        MY_ACR_REGISTRY
+        MY_KEYVAULT_NAME
+        MY_CLUSTER_NAME
+        SERVICE_ACCOUNT_NAME
+        SERVICE_ACCOUNT_NAMESPACE
+        AKS_AIRFLOW_NAMESPACE
+        AKS_AIRFLOW_CLUSTER_NAME
+        AKS_AIRFLOW_LOGS_STORAGE_ACCOUNT_NAME
+        AKS_AIRFLOW_LOGS_STORAGE_CONTAINER_NAME
+        AKS_AIRFLOW_LOGS_STORAGE_SECRET_NAME
+        MY_RESOURCE_GROUP_NAME
+        MY_IDENTITY_NAME_ID
+        MY_IDENTITY_NAME_PRINCIPAL_ID
+        MY_IDENTITY_NAME_CLIENT_ID
+        KEYVAULTID
+        KEYVAULTURL
+        MY_ACR_REGISTRY_ID
+        AKS_AIRFLOW_LOGS_STORAGE_ACCOUNT_KEY
+        OIDC_URL
+        KUBELET_IDENTITY
+        TENANT_ID
+        MY_ACR_REGISTRY
+    )
+
+    for var in "${global_vars[@]}"; do
+        # Only write variables which are set (non-empty)
+        if [[ -n "${!var:-}" ]]; then
+            echo "$var='${!var}'" >> "$env_file"
+        fi
+    done
+
+    log_success "Global variables written to $env_file"
+}
 # MAIN EXECUTION
 provision_resource_group
 provision_identity
@@ -257,6 +365,7 @@ provision_secret_store
 provision_container_registry
 provision_storage
 provision_cluster
+grant_permission_to_cluster_on_secret_manager
 import_images
-
+write_globals_to_env $env
 log_success "Provisioning script completed successfully."
