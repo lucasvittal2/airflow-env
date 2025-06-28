@@ -14,3 +14,4 @@ kubectl create namespace ${AKS_AIRFLOW_NAMESPACE} --dry-run=client --output yaml
 #deploy airflow on AKS
 .github/bash/deploy.sh  --environment dev
 
+kubectl port-forward svc/airflow-webserver  8080:8080 -n airflow

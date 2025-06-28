@@ -73,7 +73,7 @@ install_external_secrets_plugin() {
 create_airflow_git_ssh_secret_if_not_exists() {
   local SECRET_NAME="airflow-git-ssh-secret"
   local NAMESPACE="${AKS_AIRFLOW_NAMESPACE}"
-  local SSH_KEY_PATH="$HOME/.ssh/airflowsshkey.pub"
+  local SSH_KEY_PATH="$HOME/.ssh/airflow.pub"
 
   log_info "Checking if secret '$SECRET_NAME' exists in namespace '$NAMESPACE'..."
   if kubectl get secret "$SECRET_NAME" --namespace "$NAMESPACE" >/dev/null 2>&1; then
