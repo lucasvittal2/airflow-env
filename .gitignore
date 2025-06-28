@@ -7,3 +7,4 @@
 /helm/charts/airflow-1.16.0.tgz
 /helm/airflow/charts/airflow-1.16.0.tgz
 /.venv/
+git_secret.env
