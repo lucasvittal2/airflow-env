@@ -154,8 +154,7 @@ install_or_upgrade_airflow_chart() {
       --namespace "$NAMESPACE" \
       -f "$VALUES_FILE" \
       --version "$CHART_VERSION" \
-      --set dags.persistence.enabled=true \
-      --set dags.gitSync.enabled=true \
+      --timeout 10m \
       --debug
     log_success "Airflow chart upgraded in namespace '$NAMESPACE'."
   else
