@@ -198,16 +198,19 @@ provision_cluster() {
             log_warning "AKS cluster '$MY_CLUSTER_NAME' already exists. Skipping it..."
         else
             log_info "Creating AKS cluster '$MY_CLUSTER_NAME'"
-            az aks create --location "$MY_LOCATION" --name "$MY_CLUSTER_NAME" --tier standard --resource-group "$MY_RESOURCE_GROUP_NAME" \
-                --network-plugin azure \
-                --node-vm-size "$VM_SIZE" \
-                --node-count "$NODE_COUNT" \
-                --auto-upgrade-channel stable \
-                --node-os-upgrade-channel NodeImage \
-                --attach-acr "$MY_ACR_REGISTRY" --enable-oidc-issuer \
-                --enable-blob-driver --enable-workload-identity \
-                --generate-ssh-keys \
-                --output table
+            az aks create --location "$MY_LOCATION" \
+            --name "$MY_CLUSTER_NAME" --tier standard \
+            --resource-group "$MY_RESOURCE_GROUP_NAME" \
+            --network-plugin azure \
+            --node-vm-size "$VM_SIZE" \
+            --node-count "$NODE_COUNT" \
+            --auto-upgrade-channel stable \
+            --node-os-upgrade-channel NodeImage \
+            --attach-acr "$MY_ACR_REGISTRY" --enable-oidc-issuer \
+            --enable-blob-driver --enable-workload-identity \
+            --api-server-authorized-ip-ranges 0.0.0.0/0 \
+            --generate-ssh-keys \
+            --output table
             log_success "AKS cluster created."
         fi
 
@@ -233,6 +236,7 @@ import_images() {
             "quay.io/prometheus/statsd-exporter:v0.26.1 statsd-exporter:v0.26.1"
             "docker.io/apache/airflow:2.9.3 airflow:2.9.3"
             "registry.k8s.io/git-sync/git-sync:v4.1.0 git-sync:v4.1.0"
+            "ghcr.io/external-secrets/external-secrets:v0.18.1"
         )
         for img in "${images[@]}"; do
             local src="${img%% *}"

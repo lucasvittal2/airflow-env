@@ -18,6 +18,7 @@ done
 
 # get global vars
 source  "${env}.env"
+source  git_secret.env
 
 # Logging functions
 log_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
@@ -110,6 +111,7 @@ generate_values_yaml() {
     [TENANT_ID]="$TENANT_ID"
     [KEYVAULTURL]="$KEYVAULTURL"
     [MY_ACR_REGISTRY]="$MY_ACR_REGISTRY"
+    [GITBASE64_PRIVATE_KEY]="$GITBASE64_PRIVATE_KEY"
   )
 
   # Read the template into a variable
@@ -152,6 +154,8 @@ install_or_upgrade_airflow_chart() {
       --namespace "$NAMESPACE" \
       -f "$VALUES_FILE" \
       --version "$CHART_VERSION" \
+      --set dags.persistence.enabled=true \
+      --set dags.gitSync.enabled=true \
       --debug
     log_success "Airflow chart upgraded in namespace '$NAMESPACE'."
   else
