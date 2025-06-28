@@ -79,19 +79,19 @@ pgbouncer:
   enabled: true
 
 dags:
+  persistence:
+    enabled: false  # IMPORTANT: Must be false when using git sync
   gitSync:
     enabled: true
-    repo: git@github.com:lucasvittal2/airflow-env.git
+    repo: https://github.com/lucasvittal2/airflow-env.git
     branch: dev
     rev: HEAD
     depth: 1
     maxFailures: 3
     subPath: "src/python/dags"
-    syncWait: 30
+    wait: 60
     sshKeySecret: airflow-git-ssh-secret
-    sshSecretKey: "id_rsa"
-    knownHosts: |
-      github.com ssh-rsa <GITBASE64_PRIVATE_KEY>
+
 
 logs:
   persistence:
