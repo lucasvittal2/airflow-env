@@ -85,7 +85,7 @@ dags:
     branch: dev
     rev: HEAD
     depth: 1
-    maxFailures: 0
+    maxFailures: 3
     subPath: "src/python/dags"
     syncWait: 30
     sshKeySecret: airflow-git-ssh-secret
