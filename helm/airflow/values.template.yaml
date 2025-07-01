@@ -1,7 +1,6 @@
 webserverSecretKey: f1023ed56bd3eb8ee2b069c5eec748b5
 deployParams:
   AKS_AIRFLOW_NAMESPACE: <AKS_AIRFLOW_NAMESPACE>
-  AZ_TENANT_ID: <AZ_TENANT_ID>
   SERVICE_ACCOUNT_NAME: <SERVICE_ACCOUNT_NAME>
   MY_IDENTITY_NAME: <MY_IDENTITY_NAME>
   KEYVAULT_URL: <KEYVAULT_URL>
@@ -80,7 +79,7 @@ pgbouncer:
 
 dags:
   persistence:
-    enabled: false  # IMPORTANT: Must be false when using git sync
+    enabled: false  # obrigatório quando usa gitSync
   gitSync:
     enabled: true
     repo: https://github.com/lucasvittal2/airflow-env.git
