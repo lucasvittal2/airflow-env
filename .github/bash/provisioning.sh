@@ -26,6 +26,14 @@ print_usage() {
     exit 1
 }
 
+# Set default values to empty strings
+env=""
+MY_LOCATION=""
+NODE_COUNT=""
+AZ_SUBSCRIPTION=""
+VM_SIZE=""
+DEPLOY_ENV=""
+
 # Parse arguments
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -39,16 +47,11 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-
-
 # Validate required arguments
-if [[ -z "${env:-}" || -z "${MY_LOCATION:-}" || -z "${NODE_COUNT:-}" || -z "${AZ_SUBSCRIPTION:-}" || -z "${VM_SIZE:-}" || -z "${DEPLOY_ENV:-}" ]]; then
+if [[ -z "${env:-}" || -z "${DEPLOY_ENV:-}" ]]; then
     log_error "Missing required arguments."
     print_usage
 fi
-
-log_info "Setting Azure subscription to '$AZ_SUBSCRIPTION'"
-az account set --subscription "$AZ_SUBSCRIPTION"
 
 export MY_IDENTITY_NAME="airflow-identity-${env}"
 export MY_ACR_REGISTRY=airflowregistry${env}
@@ -65,8 +68,10 @@ export MY_RESOURCE_GROUP_NAME=apache-airflow-${env}
 
 # Provision resource group
 provision_resource_group() {
-    log_info  "Provisioning resource group..."
+    log_info "Provisioning resource group..."
     if [[ "${DEPLOY_ENV}" == "azure" ]]; then
+        log_info "Setting Azure subscription to '$AZ_SUBSCRIPTION'"
+        az account set --subscription "$AZ_SUBSCRIPTION"
         if az group show --name "$MY_RESOURCE_GROUP_NAME" &>/dev/null; then
             log_warning "Resource group '$MY_RESOURCE_GROUP_NAME' already exists. Skipping it..."
         else
@@ -75,13 +80,13 @@ provision_resource_group() {
             log_success "Resource group created."
         fi
     else
-        log_error "Provider '${DEPLOY_ENV}' is invalid or unavailable. Skipping resource group provisioning."
+        log_warning "Provider '${DEPLOY_ENV}' is invalid or unavailable for this function. Skipping resource group provisioning."
     fi
 }
 
 # Provision managed identity
 provision_identity() {
-    log_info  "Provisioning identity on deploy provider..."
+    log_info "Provisioning identity on deploy provider..."
     if [[ "${DEPLOY_ENV}" == "azure" ]]; then
         if az identity show --name "$MY_IDENTITY_NAME" --resource-group "$MY_RESOURCE_GROUP_NAME" &>/dev/null; then
             log_warning "Identity '$MY_IDENTITY_NAME' already exists. Skipping it..."
@@ -94,13 +99,13 @@ provision_identity() {
         export MY_IDENTITY_NAME_PRINCIPAL_ID=$(az identity show --name "$MY_IDENTITY_NAME" --resource-group "$MY_RESOURCE_GROUP_NAME" --query principalId --output tsv)
         export MY_IDENTITY_NAME_CLIENT_ID=$(az identity show --name "$MY_IDENTITY_NAME" --resource-group "$MY_RESOURCE_GROUP_NAME" --query clientId --output tsv)
     else
-        log_error "Provider '${DEPLOY_ENV}' is invalid or unavailable. Skipping identity provisioning."
+        log_warning "Provider '${DEPLOY_ENV}' is invalid or unavailable for this function. Skipping identity provisioning."
     fi
 }
 
 # Provision Key Vault
 provision_secret_store() {
-  log_info  "Provisioning secret store..."
+    log_info "Provisioning secret store..."
     if [[ "${DEPLOY_ENV}" == "azure" ]]; then
         if az keyvault show --name "$MY_KEYVAULT_NAME" &>/dev/null; then
             log_warning "KeyVault '$MY_KEYVAULT_NAME' already exists. Skipping it..."
@@ -112,10 +117,9 @@ provision_secret_store() {
         export KEYVAULTID=$(az keyvault show --name "$MY_KEYVAULT_NAME" --query id --output tsv)
         export KEYVAULTURL=$(az keyvault show --name "$MY_KEYVAULT_NAME" --query properties.vaultUri --output tsv)
     else
-        log_error "Provider '${DEPLOY_ENV}' is invalid or unavailable. Skipping KeyVault provisioning."
+        log_warning "Provider '${DEPLOY_ENV}' is invalid or unavailable for this function. Skipping KeyVault provisioning."
     fi
 }
-
 
 provision_container_registry() {
     log_info "Provisioning container registry..."
@@ -144,10 +148,9 @@ provision_container_registry() {
         fi
         export MY_ACR_REGISTRY_ID=$(az acr show --name "$MY_ACR_REGISTRY" --resource-group "$MY_RESOURCE_GROUP_NAME" --query id --output tsv 2>/dev/null || echo "")
     else
-        log_error "Provider '${DEPLOY_ENV}' is invalid or unavailable. Skipping ACR provisioning."
+        log_warning "Provider '${DEPLOY_ENV}' is invalid or unavailable for this function. Skipping ACR provisioning."
     fi
 }
-
 
 provision_storage() {
     if [[ "${DEPLOY_ENV}" == "azure" ]]; then
@@ -188,7 +191,7 @@ provision_storage() {
         az keyvault secret set --vault-name "$MY_KEYVAULT_NAME" --name AKS-AIRFLOW-LOGS-STORAGE-ACCOUNT-NAME --value "$AKS_AIRFLOW_LOGS_STORAGE_ACCOUNT_NAME"
         az keyvault secret set --vault-name "$MY_KEYVAULT_NAME" --name AKS-AIRFLOW-LOGS-STORAGE-ACCOUNT-KEY --value "$AKS_AIRFLOW_LOGS_STORAGE_ACCOUNT_KEY"
     else
-        log_error "Provider '${DEPLOY_ENV}' is invalid or unavailable. Skipping storage provisioning."
+        log_warning "Provider '${DEPLOY_ENV}' is invalid or unavailable for this function. Skipping storage provisioning."
     fi
 }
 
@@ -212,32 +215,135 @@ provision_cluster() {
             --generate-ssh-keys \
             --output table
             log_success "AKS cluster created."
+            OIDC_URL=$(az aks show --resource-group "$MY_RESOURCE_GROUP_NAME" --name "$MY_CLUSTER_NAME" --query oidcIssuerProfile.issuerUrl --output tsv)
+            grant_permission_to_cluster_on_secret_manager "$OIDC_URL"
         fi
 
-        export OIDC_URL=$(az aks show --resource-group "$MY_RESOURCE_GROUP_NAME" --name "$MY_CLUSTER_NAME" --query oidcIssuerProfile.issuerUrl --output tsv)
+
         export KUBELET_IDENTITY=$(az aks show -g "$MY_RESOURCE_GROUP_NAME" --name "$MY_CLUSTER_NAME" --output tsv --query identityProfile.kubeletidentity.objectId)
         az role assignment create --assignee "$KUBELET_IDENTITY" --role "AcrPull" --scope "$MY_ACR_REGISTRY_ID" --output table || log_warning "Failed to assign AcrPull. It may already be assigned."
-        log_info "Connection to the cluster ${AKS_AIRFLOW_CLUSTER_NAME}..."
+        log_info "Connection to the cluster ${MY_CLUSTER_NAME}..."
         az aks get-credentials --resource-group "$MY_RESOURCE_GROUP_NAME" --name "$MY_CLUSTER_NAME" --overwrite-existing --output table
         log_success "Connected to the cluster successfully !"
-        log_success "Provisioning of AKS cluster ${AKS_AIRFLOW_CLUSTER_NAME} finished."
+        log_success "Provisioning of AKS cluster ${MY_CLUSTER_NAME} finished."
+    elif [[ "${DEPLOY_ENV}" == "local" ]]; then
+        # Check if minikube is installed
+        if ! command -v minikube &>/dev/null; then
+            log_info "Minikube not found. Installing minikube..."
+
+            # Detect OS and architecture
+            local os=$(uname -s | tr '[:upper:]' '[:lower:]')
+            local arch=$(uname -m)
+
+            # Convert architecture names
+            case $arch in
+                x86_64) arch="amd64" ;;
+                arm64|aarch64) arch="arm64" ;;
+                *) log_error "Unsupported architecture: $arch"; return 1 ;;
+            esac
+
+            # Download and install minikube
+            local minikube_url="https://storage.googleapis.com/minikube/releases/latest/minikube-${os}-${arch}"
+
+            if curl -Lo minikube "$minikube_url" && chmod +x minikube; then
+                sudo mv minikube /usr/local/bin/ || {
+                    log_warning "Failed to move minikube to /usr/local/bin, trying alternative location..."
+                    mkdir -p "$HOME/.local/bin"
+                    mv minikube "$HOME/.local/bin/"
+                    export PATH="$HOME/.local/bin:$PATH"
+                }
+                log_success "Minikube installed successfully"
+            else
+                log_error "Failed to download and install minikube"
+                return 1
+            fi
+        else
+            log_info "Minikube is already installed"
+        fi
+
+        # Check if kubectl is installed
+        if ! command -v kubectl &>/dev/null; then
+            log_info "kubectl not found. Installing kubectl..."
+
+            local os=$(uname -s | tr '[:upper:]' '[:lower:]')
+            local arch=$(uname -m)
+
+            case $arch in
+                x86_64) arch="amd64" ;;
+                arm64|aarch64) arch="arm64" ;;
+                *) log_error "Unsupported architecture: $arch"; return 1 ;;
+            esac
+
+            local kubectl_url="https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/${os}/${arch}/kubectl"
+
+            if curl -Lo kubectl "$kubectl_url" && chmod +x kubectl; then
+                sudo mv kubectl /usr/local/bin/ || {
+                    log_warning "Failed to move kubectl to /usr/local/bin, trying alternative location..."
+                    mkdir -p "$HOME/.local/bin"
+                    mv kubectl "$HOME/.local/bin/"
+                    export PATH="$HOME/.local/bin:$PATH"
+                }
+                log_success "kubectl installed successfully"
+            else
+                log_error "Failed to download and install kubectl"
+                return 1
+            fi
+        else
+            log_info "kubectl is already installed"
+        fi
+
+        # Check if minikube cluster is running
+        if minikube status &>/dev/null; then
+            log_info "Minikube cluster is already running"
+        else
+            log_info "Starting minikube cluster..."
+            # Start minikube with recommended settings for Airflow
+            if minikube start \
+                --driver=docker \
+                --cpus="${MINIKUBE_CPUS:-4}" \
+                --memory="${MINIKUBE_MEMORY:-8192}" \
+                --disk-size="${MINIKUBE_DISK:-20g}" \
+                --kubernetes-version="${MINIKUBE_K8S_VERSION:-stable}"; then
+                log_success "Minikube cluster started successfully"
+            else
+                log_error "Failed to start minikube cluster"
+                return 1
+            fi
+        fi
+
+        # Connect to the local cluster
+        log_info "Connecting to minikube cluster..."
+        if kubectl config use-context minikube; then
+            log_success "Connected to minikube cluster successfully!"
+
+            # Verify connection
+            log_info "Verifying cluster connection..."
+            kubectl cluster-info
+            kubectl get nodes
+
+            log_success "Local minikube cluster provisioning finished."
+        else
+            log_error "Failed to connect to minikube cluster"
+            return 1
+        fi
+
     else
-        log_error "Provider '${DEPLOY_ENV}' is invalid or unavailable. Skipping AKS provisioning."
+        log_warning "Provider '${DEPLOY_ENV}' is invalid or unavailable for this function. Skipping cluster provisioning."
     fi
 }
 
-
 import_images() {
+    local images=(
+        "docker.io/apache/airflow:airflow-pgbouncer-2024.01.19-1.21.0 airflow:airflow-pgbouncer-2024.01.19-1.21.0"
+        "docker.io/apache/airflow:airflow-pgbouncer-exporter-2024.06.18-0.17.0 airflow:airflow-pgbouncer-exporter-2024.06.18-0.17.0"
+        "docker.io/bitnami/postgresql:16.1.0-debian-11-r15 postgresql:16.1.0-debian-11-r15"
+        "quay.io/prometheus/statsd-exporter:v0.26.1 statsd-exporter:v0.26.1"
+        "docker.io/apache/airflow:2.9.3 airflow:2.9.3"
+        "registry.k8s.io/git-sync/git-sync:v4.1.0 git-sync:v4.1.0"
+        "ghcr.io/external-secrets/external-secrets:v0.18.1"
+    )
+
     if [[ "${DEPLOY_ENV}" == "azure" ]]; then
-        local images=(
-            "docker.io/apache/airflow:airflow-pgbouncer-2024.01.19-1.21.0 airflow:airflow-pgbouncer-2024.01.19-1.21.0"
-            "docker.io/apache/airflow:airflow-pgbouncer-exporter-2024.06.18-0.17.0 airflow:airflow-pgbouncer-exporter-2024.06.18-0.17.0"
-            "docker.io/bitnami/postgresql:16.1.0-debian-11-r15 postgresql:16.1.0-debian-11-r15"
-            "quay.io/prometheus/statsd-exporter:v0.26.1 statsd-exporter:v0.26.1"
-            "docker.io/apache/airflow:2.9.3 airflow:2.9.3"
-            "registry.k8s.io/git-sync/git-sync:v4.1.0 git-sync:v4.1.0"
-            "ghcr.io/external-secrets/external-secrets:v0.18.1"
-        )
         for img in "${images[@]}"; do
             local src="${img%% *}"
             local dest="${img##* }"
@@ -249,84 +355,98 @@ import_images() {
                 log_success "Imported image '$dest'"
             fi
         done
+    elif [[ "${DEPLOY_ENV}" == "local" ]]; then
+        for img in "${images[@]}"; do
+            local src="${img%% *}"
+            local dest="${img##* }"
+
+            log_info "Pulling image '$src' locally"
+            if docker pull "$src"; then
+                log_success "Successfully pulled image '$src'"
+
+                # Tag the image with the destination name if it's different from source
+                if [[ "$src" != "$dest" ]]; then
+                    log_info "Tagging image '$src' as '$dest'"
+                    if docker tag "$src" "$dest"; then
+                        log_success "Successfully tagged image as '$dest'"
+                    else
+                        log_error "Failed to tag image '$src' as '$dest'"
+                    fi
+                fi
+            else
+                log_error "Failed to pull image '$src'"
+            fi
+        done
     else
-        log_error "Provider '${DEPLOY_ENV}' is invalid or unavailable. Skipping image import."
+        log_warning "Provider '${DEPLOY_ENV}' is invalid or unavailable for this function. Skipping image import."
     fi
 }
+
 # shellcheck disable=SC2120
 grant_permission_to_cluster_on_secret_manager() {
-  # Find the last objectId for the given app displayName
-  local APP_OBJ_ID
-  APP_OBJ_ID=$(az ad sp list --all --query "[?displayName=='airflow-identity-dev'].{objectId:id}" -o tsv | tail -n 1)
+    OIDC_URL=$1
+    if [[ "${DEPLOY_ENV}" == "azure" ]]; then
+        has_kv_policy() {
+            local OBJ_ID="$1"
+            az keyvault show --name "$MY_KEYVAULT_NAME" --query "properties.accessPolicies[?objectId=='$OBJ_ID']" -o json | \
+                grep -q '"permissions"' && \
+            az keyvault show --name "$MY_KEYVAULT_NAME" \
+                --query "properties.accessPolicies[?objectId=='$OBJ_ID'].permissions.secrets[]" -o json | \
+                grep -q "\"get\""
+        }
 
-  # Function to check if a key vault policy already exists for an object ID and permission
-  has_kv_policy() {
-    local OBJ_ID="$1"
-    az keyvault show --name "$MY_KEYVAULT_NAME" --query "properties.accessPolicies[?objectId=='$OBJ_ID']" -o json | \
-      grep -q '"permissions"' && \
-    az keyvault show --name "$MY_KEYVAULT_NAME" \
-      --query "properties.accessPolicies[?objectId=='$OBJ_ID'].permissions.secrets[]" -o json | \
-      grep -q "\"get\""
-  }
+        if ! has_kv_policy "$MY_IDENTITY_NAME_PRINCIPAL_ID"; then
+            log_info "Granting 'get' secret permission to airflow-identity-${env}"
+            az keyvault set-policy --name "$MY_KEYVAULT_NAME" --object-id "$MY_IDENTITY_NAME_PRINCIPAL_ID" --secret-permissions get --output table
+        else
+            log_info "'get' secret permission already granted to airflow-identity-${env}. Skipping."
+        fi
 
-  # Give permission to key vault for cluster identity if not already present
-  if ! has_kv_policy "$MY_IDENTITY_NAME_PRINCIPAL_ID"; then
-    log_info "Granting 'get' secret permission to cluster identity"
-    az keyvault set-policy --name "$MY_KEYVAULT_NAME" --object-id "$MY_IDENTITY_NAME_PRINCIPAL_ID" --secret-permissions get --output table
-  else
-    log_info "'get' secret permission already granted to cluster identity. Skipping."
-  fi
+        log_info "Checking if federated credential already exists for cluster access to key vault"
+        # Check if the federated credential already exists
+        local EXISTING
+        EXISTING=$(az identity federated-credential list \
+            --identity-name "${MY_IDENTITY_NAME}" \
+            --resource-group "${MY_RESOURCE_GROUP_NAME}" \
+            --query "[?name=='external-secret-operator'] | length(@)" \
+            --output tsv)
 
-  # Give permission to key vault for airflow-identity-dev app if not already present
-  if ! has_kv_policy "$APP_OBJ_ID"; then
-    log_info "Granting 'get' secret permission to airflow-identity-dev"
-    az keyvault set-policy --name "$MY_KEYVAULT_NAME" --object-id "$APP_OBJ_ID" --secret-permissions get --output table
-  else
-    log_info "'get' secret permission already granted to airflow-identity-dev. Skipping."
-  fi
-
-  if [[ "${DEPLOY_ENV}" == "azure" ]]; then
-    log_info "Checking if federated credential already exists for cluster access to key vault"
-    # Check if the federated credential already exists
-    local EXISTING
-    EXISTING=$(az identity federated-credential list \
-      --identity-name "${MY_IDENTITY_NAME}" \
-      --resource-group "${MY_RESOURCE_GROUP_NAME}" \
-      --query "[?name=='external-secret-operator'] | length(@)" \
-      --output tsv)
-
-    if [[ "${EXISTING}" == "0" ]]; then
-      log_info "Granting federated credential for cluster access to key vault"
-      az identity federated-credential create \
-        --name external-secret-operator \
-        --identity-name "${MY_IDENTITY_NAME}" \
-        --resource-group "${MY_RESOURCE_GROUP_NAME}" \
-        --issuer "${OIDC_URL}" \
-        --subject "system:serviceaccount:${AKS_AIRFLOW_NAMESPACE}:${SERVICE_ACCOUNT_NAME}" \
-        --audience "api://AzureADTokenExchange" \
-        --output table
+        if [[ "${EXISTING}" == "0" ]]; then
+            log_info "Granting federated credential for cluster access to key vault"
+            az identity federated-credential create \
+                --name external-secret-operator \
+                --identity-name "${MY_IDENTITY_NAME}" \
+                --resource-group "${MY_RESOURCE_GROUP_NAME}" \
+                --issuer "${OIDC_URL}" \
+                --subject "system:serviceaccount:${AKS_AIRFLOW_NAMESPACE}:${SERVICE_ACCOUNT_NAME}" \
+                --audience "api://AzureADTokenExchange" \
+                --output table
+        else
+            log_info "Federated credential already exists. Skipping creation."
+        fi
     else
-      log_info "Federated credential already exists. Skipping creation."
+        log_warning "Provider '${DEPLOY_ENV}' is invalid or unavailable for this function. Skipping operation."
     fi
-  else
-    log_error "Provider '${DEPLOY_ENV}' is invalid or unavailable. Skipping operation."
-  fi
 }
 
 write_globals_to_env() {
-  env=$1
+    local env=$1
     local env_file="${env}.env"
     # Clear or create the dev.env file
     > "$env_file"
 
     # List of global variable names to export to dev.env
     log_info "Exporting variables to $env_file"
-    export MY_IDENTITY_NAME_ID=$(az identity show --name "$MY_IDENTITY_NAME" --resource-group "$MY_RESOURCE_GROUP_NAME" --query id --output tsv)
-    export MY_IDENTITY_NAME_PRINCIPAL_ID=$(az identity show --name "$MY_IDENTITY_NAME" --resource-group "$MY_RESOURCE_GROUP_NAME" --query principalId --output tsv)
-    export MY_IDENTITY_NAME_CLIENT_ID=$(az identity show --name "$MY_IDENTITY_NAME" --resource-group "$MY_RESOURCE_GROUP_NAME" --query clientId --output tsv)
-    export OIDC_URL=$(az aks show --resource-group "$MY_RESOURCE_GROUP_NAME" --name "$MY_CLUSTER_NAME" --query oidcIssuerProfile.issuerUrl --output tsv)
-    export KUBELET_IDENTITY=$(az aks show -g "$MY_RESOURCE_GROUP_NAME" --name "$MY_CLUSTER_NAME" --output tsv --query identityProfile.kubeletidentity.objectId)
-    export TENANT_ID=$(az account show --query tenantId -o tsv)
+
+    if [[ "${DEPLOY_ENV}" == "azure" ]]; then
+        export MY_IDENTITY_NAME_ID=$(az identity show --name $MY_IDENTITY_NAME --resource-group $MY_RESOURCE_GROUP_NAME --query id --output tsv)
+        export MY_IDENTITY_NAME_PRINCIPAL_ID=$(az identity show --name $MY_IDENTITY_NAME --resource-group $MY_RESOURCE_GROUP_NAME --query principalId --output tsv)
+        export MY_IDENTITY_NAME_CLIENT_ID=$(az identity show --name $MY_IDENTITY_NAME --resource-group $MY_RESOURCE_GROUP_NAME --query clientId --output tsv)
+        export OIDC_URL=$(az aks show --resource-group $MY_RESOURCE_GROUP_NAME --name $MY_CLUSTER_NAME --query oidcIssuerProfile.issuerUrl --output tsv)
+        export KUBELET_IDENTITY=$(az aks show -g $MY_RESOURCE_GROUP_NAME --name $MY_CLUSTER_NAME --output tsv --query identityProfile.kubeletidentity.objectId)
+        export TENANT_ID=$(az account show --query tenantId -o tsv)
+    fi
+
     local global_vars=(
         MY_IDENTITY_NAME
         MY_ACR_REGISTRY
@@ -350,7 +470,6 @@ write_globals_to_env() {
         OIDC_URL
         KUBELET_IDENTITY
         TENANT_ID
-        MY_ACR_REGISTRY
     )
 
     for var in "${global_vars[@]}"; do
@@ -362,6 +481,7 @@ write_globals_to_env() {
 
     log_success "Global variables written to $env_file"
 }
+
 # MAIN EXECUTION
 provision_resource_group
 provision_identity
@@ -369,7 +489,6 @@ provision_secret_store
 provision_container_registry
 provision_storage
 provision_cluster
-grant_permission_to_cluster_on_secret_manager
 import_images
-write_globals_to_env $env
+write_globals_to_env "$env"
 log_success "Provisioning script completed successfully."
