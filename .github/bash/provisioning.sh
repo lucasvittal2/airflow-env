@@ -298,15 +298,16 @@ provision_cluster() {
         else
             log_info "Starting minikube cluster..."
             # Start minikube with recommended settings for Airflow
-            export HTTP_PROXY=http://localhost:80
-            export HTTPS_PROXY=https://localhost:443
-            export NO_PROXY=localhost,127.0.0.1,10.96.0.0/12,192.168.59.0/24,192.168.49.0/24,192.168.39.0/24
+#            export HTTP_PROXY=http://localhost:80
+#            export HTTPS_PROXY=https://localhost:443
+#            export NO_PROXY=localhost,127.0.0.1,10.96.0.0/12,192.168.59.0/24,192.168.49.0/24,192.168.39.0/24
             if minikube start \
                 --driver=docker \
                 --cpus="${MINIKUBE_CPUS:-2}" \
                 --memory="${MINIKUBE_MEMORY:-2048}" \
                 --disk-size="${MINIKUBE_DISK:-2g}" \
                 --kubernetes-version="${MINIKUBE_K8S_VERSION:-stable}"; then
+
                 log_success "Minikube cluster started successfully"
             else
                 log_error "Failed to start minikube cluster"
@@ -347,6 +348,15 @@ import_images() {
     )
 
     if [[ "${DEPLOY_ENV}" == "azure" ]]; then
+        local images=(
+        "docker.io/apache/airflow:airflow-pgbouncer-2024.01.19-1.21.0 airflow:airflow-pgbouncer-2024.01.19-1.21.0"
+        "docker.io/apache/airflow:airflow-pgbouncer-exporter-2024.06.18-0.17.0 airflow:airflow-pgbouncer-exporter-2024.06.18-0.17.0"
+        "docker.io/bitnami/postgresql:16.1.0-debian-11-r15 postgresql:16.1.0-debian-11-r15"
+        "quay.io/prometheus/statsd-exporter:v0.26.1 statsd-exporter:v0.26.1"
+        "docker.io/apache/airflow:2.9.3 airflow:2.9.3"
+        "registry.k8s.io/git-sync/git-sync:v4.1.0 git-sync:v4.1.0"
+        "ghcr.io/external-secrets/external-secrets:v0.18.1"
+    )
         for img in "${images[@]}"; do
             local src="${img%% *}"
             local dest="${img##* }"
@@ -362,6 +372,15 @@ import_images() {
         for img in "${images[@]}"; do
             local src="${img%% *}"
             local dest="${img##* }"
+            local images=(
+                    "docker.io/apache/airflow:airflow-pgbouncer-2024.01.19-1.21.0 airflow:airflow-pgbouncer-2024.01.19-1.21.0"
+                    "docker.io/apache/airflow:airflow-pgbouncer-exporter-2024.06.18-0.17.0 airflow:airflow-pgbouncer-exporter-2024.06.18-0.17.0"
+                    "docker.io/bitnami/postgresql:16.1.0-debian-11-r15 postgresql:16.1.0-debian-11-r15"
+                    "quay.io/prometheus/statsd-exporter:v0.26.1 statsd-exporter:v0.26.1"
+                    "lucasvittal/airflow:3.0.2  airflow:3.0.2"
+                    "registry.k8s.io/git-sync/git-sync:v4.1.0 git-sync:v4.1.0"
+                    "ghcr.io/external-secrets/external-secrets:v0.18.1"
+                  )
 
             log_info "Pulling image '$src' locally"
             if docker pull "$src"; then
@@ -485,9 +504,21 @@ write_globals_to_env() {
     log_success "Global variables written to $env_file"
 }
 
-
+build_update_image_airflow(){
+  local tag="airflow:3.0.2"
+  local registry_tag="lucasvittal/airflow:3.0.2"
+  log_info "Building container image..."
+  docker build . -t $tag
+  log_success "Image built with tag $tag"
+  docker tag $tag $registry_tag
+  log_info "Retaged image to $registry_tag push on registry"
+  log_info "Pushing image $registry_tag to private registry"
+  docker push $registry_tag
+  log_success "Container image setup finished successfully"
+}
 
 # MAIN EXECUTION
+build_update_image_airflow
 provision_resource_group
 provision_identity
 provision_secret_store
