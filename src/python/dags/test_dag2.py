@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.operators.python import PythonOperator
+import airflow
 
 default_args = {
     'owner': 'airflow',
@@ -15,6 +16,7 @@ default_args = {
 def print_hello():
     """Simple Python function that prints hello"""
     print("Hello world from Airflow!")
+    print(f"Running on Airflow version: {airflow.__version__}")
     return "Hello world task completed successfully"
 
 
@@ -25,22 +27,33 @@ def print_date():
     return current_time
 
 
-with DAG(
-        dag_id='hello_world_improved',
-        description='Hello World DAG with improvements',
-        schedule_interval=timedelta(minutes=10),  # Every 10 minutes for testing
-        start_date=datetime(2025, 1, 1),  # More recent start date
-        catchup=False,
-        tags=['test', 'tutorial', 'hello-world'],
-        default_args=default_args,
-        max_active_runs=1,  # Prevent overlapping runs
-) as dag:
+# Check Airflow version for compatibility
+airflow_version = tuple(map(int, airflow.__version__.split('.')[:2]))
+
+# Use appropriate schedule parameter based on version
+dag_kwargs = {
+    'dag_id': 'hello_world_compatible',
+    'description': 'Hello World DAG - Version Compatible',
+    'start_date': datetime(2025, 1, 1),
+    'catchup': False,
+    'tags': ['test', 'tutorial', 'hello-world', 'compatible'],
+    'default_args': default_args,
+    'max_active_runs': 1,
+}
+
+# Add schedule parameter based on Airflow version
+if airflow_version >= (2, 4):
+    dag_kwargs['schedule'] = timedelta(minutes=10)  # New format
+else:
+    dag_kwargs['schedule_interval'] = timedelta(minutes=10)  # Old format
+
+with DAG(**dag_kwargs) as dag:
     hello_task = PythonOperator(
         task_id='say_hello',
         python_callable=print_hello,
         doc_md="""
         ## Hello Task
-        This task prints 'Hello world!' to the logs.
+        This task prints 'Hello world!' and Airflow version to the logs.
         """
     )
 
