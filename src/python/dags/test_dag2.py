@@ -2,6 +2,7 @@ from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 import airflow
+import numpy as np
 
 default_args = {
     'owner': 'airflow',
@@ -22,6 +23,10 @@ def print_hello():
 
 def print_date():
     """Print current date and time"""
+    array = np.array([1, 2, 3])
+    array2 = np.array([3, 4, 5])
+    result = np.dot(array, array2)
+    print(f"dot product result: {result}")
     current_time = datetime.now()
     print(f"Current time: {current_time}")
     return current_time
