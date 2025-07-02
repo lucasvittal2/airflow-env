@@ -12,7 +12,12 @@ NC='\033[0m' # No Color
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --environment) env="$2"; shift 2 ;;
-        *) log_error "Unknown argument: $1"; print_usage ;;
+        --deploy-env) DEPLOY_ENV="$2"; shift 2 ;;
+        *)
+            log_error "Unknown argument: $1"
+            print_usage
+            exit 1
+            ;;
     esac
 done
 
@@ -86,7 +91,7 @@ create_airflow_git_ssh_secret_if_not_exists() {
     log_success "Secret '$SECRET_NAME' created in namespace '$NAMESPACE'."
   fi
 }
-generate_values_yaml() {
+az_generate_values_yaml() {
   local env_file="$1.env"
   local template_file="helm/airflow/values.template.yaml"
   local output_file="helm/airflow/values.yaml"
@@ -132,7 +137,7 @@ generate_values_yaml() {
   echo "Generated $output_file"
 }
 
-install_or_upgrade_airflow_chart() {
+az_install_or_upgrade_airflow_chart() {
   local RELEASE_NAME="airflow"
   local NAMESPACE="${AKS_AIRFLOW_NAMESPACE}"
   local VALUES_FILE="helm/airflow/values.yaml"
@@ -189,12 +194,30 @@ port_forward_airflow_webserver_if_available() {
   fi
 }
 
-log_info "Starting Airflow setup steps..."
 create_namespace_if_not_exists
 create_airflow_git_ssh_secret_if_not_exists
-generate_values_yaml $env
+
+
+
+if [[ "${DEPLOY_ENV}" == "azure" ]]; then
+log_info "Starting Airflow setup steps..."
+
 install_external_secrets_plugin
-install_or_upgrade_airflow_chart
+az_generate_values_yaml $env
+az_install_or_upgrade_airflow_chart
 log_info "Starting port-forward for Airflow webserver..."
-port_forward_airflow_webserver_if_available 9090
+
 log_success "Script execution completed."
+elif   [[ "${DEPLOY_ENV}" == "local" ]] ; then
+    helm repo add apache-airflow https://airflow.apache.org
+    helm repo update
+    helm repo listThe output should include the apache-airflow repository
+    helm install airflow apache-airflow/airflow --namespace airflow --debug --timeout 10m01s
+    helm upgrade --install airflow apache-airflow/airflow -n airflow -f helm/airflow-local/values.yaml --debug
+
+else
+  echo "Env not available or non-existent"
+fi
+
+
+port_forward_airflow_webserver_if_available 9090

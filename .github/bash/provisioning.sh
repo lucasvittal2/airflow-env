@@ -298,11 +298,14 @@ provision_cluster() {
         else
             log_info "Starting minikube cluster..."
             # Start minikube with recommended settings for Airflow
+            export HTTP_PROXY=http://localhost:80
+            export HTTPS_PROXY=https://localhost:443
+            export NO_PROXY=localhost,127.0.0.1,10.96.0.0/12,192.168.59.0/24,192.168.49.0/24,192.168.39.0/24
             if minikube start \
                 --driver=docker \
-                --cpus="${MINIKUBE_CPUS:-4}" \
-                --memory="${MINIKUBE_MEMORY:-8192}" \
-                --disk-size="${MINIKUBE_DISK:-20g}" \
+                --cpus="${MINIKUBE_CPUS:-2}" \
+                --memory="${MINIKUBE_MEMORY:-2048}" \
+                --disk-size="${MINIKUBE_DISK:-2g}" \
                 --kubernetes-version="${MINIKUBE_K8S_VERSION:-stable}"; then
                 log_success "Minikube cluster started successfully"
             else
@@ -481,6 +484,8 @@ write_globals_to_env() {
 
     log_success "Global variables written to $env_file"
 }
+
+
 
 # MAIN EXECUTION
 provision_resource_group
