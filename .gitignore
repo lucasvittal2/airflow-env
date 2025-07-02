@@ -8,3 +8,4 @@
 /helm/airflow/charts/airflow-1.16.0.tgz
 /.venv/
 git_secret.env
+/helm/airflow/charts/airflow-*.tgz
