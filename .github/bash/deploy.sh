@@ -190,7 +190,7 @@ port_forward_airflow_webserver_if_available() {
     log_warning "Local port $LOCAL_PORT is already in use. Skipping port-forward."
   else
     log_info "Local port $LOCAL_PORT is available. Starting port-forward to Airflow webserver..."
-    kubectl port-forward svc/"$SERVICE_NAME" "$LOCAL_PORT":"$REMOTE_PORT" -n "$NAMESPACE"
+
   fi
 }
 
@@ -200,21 +200,24 @@ create_airflow_git_ssh_secret_if_not_exists
 
 
 if [[ "${DEPLOY_ENV}" == "azure" ]]; then
-log_info "Starting Airflow setup steps..."
 
-install_external_secrets_plugin
-az_generate_values_yaml $env
-az_install_or_upgrade_airflow_chart
-log_info "Starting port-forward for Airflow webserver..."
+    log_info "Starting Airflow setup steps..."
+    install_external_secrets_plugin
+    az_generate_values_yaml $env
+    az_install_or_upgrade_airflow_chart
+    log_info "Starting port-forward for Airflow webserver..."
+    kubectl port-forward svc/"$SERVICE_NAME" "$LOCAL_PORT":"$REMOTE_PORT" -n "$NAMESPACE"
+    log_success "Script execution completed for deployment of airflow on Azure Kubernetes Services (AKS).",
 
-log_success "Script execution completed."
 elif   [[ "${DEPLOY_ENV}" == "local" ]] ; then
     helm repo add apache-airflow https://airflow.apache.org
     helm repo update
     helm repo listThe output should include the apache-airflow repository
     helm install airflow apache-airflow/airflow --namespace airflow --debug --timeout 10m01s
     helm upgrade --install airflow apache-airflow/airflow -n airflow -f helm/airflow-local/values.yaml --debug
-
+    log_info "Starting port-forward for Airflow webserver..."
+    kubectl port-forward svc/airflow-api-server  "$LOCAL_PORT":"$REMOTE_PORT"  -n airflow
+    log_success "Script execution completed for deployment on local machine."
 else
   echo "Env not available or non-existent"
 fi
